@@ -496,6 +496,227 @@ def preprocess_v1(
         labels=targets,
     )
 
+def preprocess_v1_with_debug(
+    sources,
+    tokenizer: transformers.PreTrainedTokenizer,
+    has_image: bool = False
+) -> Dict:
+    """
+    V1 스타일 대화 데이터를 전처리하고 디버깅 정보를 파일에 기록하는 함수.
+
+    Args:
+        sources (List[Dict]): 원본 대화 데이터.
+        tokenizer (transformers.PreTrainedTokenizer): 사용할 토크나이저.
+        has_image (bool): 이미지 데이터가 포함되어 있는지 여부.
+
+    Returns:
+        Dict: 전처리된 대화 데이터.
+            - input_ids: 토큰화된 인풋 ID.
+            - labels: 마스킹된 레이블.
+
+    각 단계마다 디버깅 정보를 'debug_preprocess_v1.txt' 파일에 기록합니다.
+    디버깅 정보에는 입력 데이터, 대화 템플릿 적용 결과, 토큰화 결과, 마스킹 처리 결과 등이 포함됩니다.
+    """
+    conv = conversation_lib.default_conversation.copy()
+    roles = {"human": conv.roles[0], "gpt": conv.roles[1]}
+
+    with open('debug_preprocess_v1.txt', 'a') as f:
+        f.write('입력 데이터:\n')
+        f.write(str(sources) + '\n\n')
+
+    # 프롬프트 템플릿 적용
+    conversations = []
+
+    for i, source in enumerate(sources):
+        if roles[source[0]["from"]] != conv.roles[0]:
+            # 첫 번째 발화가 human이 아니면 건너뜀
+            source = source[1:]
+
+        conv.messages = []
+        for j, sentence in enumerate(source):
+            role = roles[sentence["from"]]
+            assert role == conv.roles[j % 2], f"{i}"
+            conv.append_message(role, sentence["value"])
+        conversations.append(conv.get_prompt())
+
+    with open('debug_preprocess_v1.txt', 'a') as f:
+        f.write('대화 템플릿 적용 후:\n')
+        f.write(str(conversations) + '\n\n')
+
+    # 대화 토큰화
+    with open('debug_preprocess_v1.txt', 'a') as f:
+        f.write('토크나이저 적용 전:\n')
+        f.write(str(conversations) + '\n\n')
+
+    if has_image:
+        input_ids = torch.stack([tokenizer_image_token(prompt, tokenizer, return_tensors='pt') for prompt in conversations], dim=0)
+        with open('debug_preprocess_v1.txt', 'a') as f:
+            f.write('인풋 IDs 모양:\n')
+            f.write(str(input_ids.shape) + '\n\n')
+    else:
+        input_ids = tokenizer(
+            conversations,
+            return_tensors="pt",
+            padding="longest",
+            max_length=tokenizer.model_max_length,
+            truncation=True,
+        ).input_ids
+
+    with open('debug_preprocess_v1.txt', 'a') as f:
+        f.write('토크나이저 적용 후:\n')
+        f.write(str(input_ids) + '\n\n')
+
+    targets = input_ids.clone()
+
+    assert conv.sep_style == conversation_lib.SeparatorStyle.TWO
+
+    with open('debug_preprocess_v1.txt', 'a') as f:
+        f.write('토크나이저 정보:\n')
+        f.write(str(tokenizer) + '\n\n')
+
+    # 마스킹
+    sep = conv.sep + conv.roles[1] + ": "
+    for conversation, target in zip(conversations, targets):
+        total_len = int(target.ne(tokenizer.pad_token_id).sum())
+        with open('debug_preprocess_v1.txt', 'a') as f:
+            f.write(f'전체 토큰 길이: {total_len}\n')
+            f.write(f'sep: {sep}\n')
+            f.write(f'conv.sep2: {conv.sep2}\n\n')
+
+        rounds = conversation.split(conv.sep2)
+        with open('debug_preprocess_v1.txt', 'a') as f:
+            f.write(f'라운드 수: {len(rounds)}\n')
+
+        cur_len = 1
+        target[:cur_len] = IGNORE_INDEX
+        for i, rou in enumerate(rounds):
+            with open('debug_preprocess_v1.txt', 'a') as f:
+                f.write(f'Round {i}:\n')
+                f.write(f'rou: {rou}\n')
+                
+            if rou == "":
+                break
+
+            parts = rou.split(sep)
+            with open('debug_preprocess_v1.txt', 'a') as f:
+                f.write(f'parts: {parts}\n')
+
+            if len(parts) != 2:
+                break
+            parts[0] += sep
+
+            if has_image:
+                round_len = len(tokenizer_image_token(rou, tokenizer))
+                instruction_len = len(tokenizer_image_token(parts[0], tokenizer)) - 2
+            else:
+                round_len = len(tokenizer(rou).input_ids)
+                instruction_len = len(tokenizer(parts[0]).input_ids) - 2
+
+            with open('debug_preprocess_v1.txt', 'a') as f:
+                f.write(f'round_len: {round_len}\n')
+                f.write(f'instruction_len (before subtracting 2): {instruction_len + 2}\n')
+                f.write(f'instruction_len (after subtracting 2): {instruction_len}\n\n')
+
+            target[cur_len : cur_len + instruction_len] = IGNORE_INDEX
+            cur_len += round_len
+
+            with open('debug_preprocess_v1.txt', 'a') as f:
+                f.write(f'cur_len (after updating): {cur_len}\n\n')
+
+        target[cur_len:] = IGNORE_INDEX
+
+        with open('debug_preprocess_v1.txt', 'a') as f:
+            f.write(f'마스킹 처리 후 cur_len: {cur_len}\n')
+            f.write(f'마스킹된 target:\n{target}\n\n')
+
+            # 마스킹된 토큰을 디코딩하여 출력 (IGNORE_INDEX 제외)
+            valid_tokens = target[target != IGNORE_INDEX]
+            masked_tokens = tokenizer.decode(valid_tokens)
+            f.write(f'마스킹된 토큰을 디코딩한 결과:\n')
+            f.write(str(masked_tokens) + '\n\n')
+
+        if cur_len < tokenizer.model_max_length:
+            if cur_len != total_len:
+                target[:] = IGNORE_INDEX
+                with open('debug_preprocess_v1.txt', 'a') as f:
+                    f.write(f"경고: 토큰화 불일치: {cur_len} vs. {total_len}. (무시됨)\n\n")
+
+    return dict(
+        input_ids=input_ids,
+        labels=targets,
+    )
+
+def preprocess_eeve(sources, tokenizer: transformers.PreTrainedTokenizer, has_image: bool = False) -> Dict:
+    """
+    EEVE 모델의 대화 데이터를 전처리하는 함수입니다.
+    1. 대화 데이터에 프롬프트 템플릿을 적용합니다.
+    2. 대화를 토크나이즈합니다.
+    3. 토크나이즈된 결과를 복제하여 타겟을 만듭니다.
+    4. 타겟에서 instruction에 해당하는 부분을 IGNORE_INDEX로 마스킹합니다.
+    """
+    conv = conversation_lib.default_conversation.copy()
+    roles = {"human": conv.roles[0], "gpt": conv.roles[1]}
+
+    # 프롬프트 템플릿 적용
+    conversations = []
+    for i, source in enumerate(sources):
+        if roles[source[0]["from"]] != conv.roles[0]:
+            # 첫 번째 문장이 human의 발언이 아니면 건너뜁니다.
+            source = source[1:]
+        conv.messages = []
+        for j, sentence in enumerate(source):
+            role = roles[sentence["from"]]
+            assert role == conv.roles[j % 2], f"{i}"
+            conv.append_message(role, sentence["value"])
+        conversations.append(conv.get_prompt())
+
+    # 대화 토크나이즈
+    if has_image:
+        input_ids = torch.stack([tokenizer_image_token(prompt, tokenizer, return_tensors='pt') for prompt in conversations], dim=0)
+    else:
+        input_ids = tokenizer(
+            conversations,
+            return_tensors="pt",
+            padding="longest",
+            max_length=tokenizer.model_max_length,
+            truncation=True,
+        ).input_ids
+
+    targets = input_ids.clone()
+    assert conv.sep_style == conversation_lib.SeparatorStyle.TWO
+
+    # 타겟 마스킹
+    sep = conv.sep + conv.roles[1] + ": "
+    for conversation, target in zip(conversations, targets):
+        total_len = int(target.ne(tokenizer.pad_token_id).sum())
+        rounds = conversation.split(conv.sep2)
+        cur_len = 1
+        target[:cur_len] = IGNORE_INDEX
+        for i, rou in enumerate(rounds):
+            if rou == "":
+                break
+            parts = rou.split(sep)
+            if len(parts) != 2:
+                break
+            parts[0] += sep
+            if has_image:
+                round_len = len(tokenizer_image_token(rou, tokenizer))
+                instruction_len = len(tokenizer_image_token(parts[0], tokenizer)) - 2
+            else:
+                round_len = len(tokenizer(rou).input_ids)
+                instruction_len = len(tokenizer(parts[0]).input_ids) - 2
+            target[cur_len : cur_len + instruction_len] = IGNORE_INDEX
+            cur_len += round_len
+        target[cur_len:] = IGNORE_INDEX
+        if cur_len < tokenizer.model_max_length:
+            if cur_len != total_len:
+                target[:] = IGNORE_INDEX
+                print(
+                    f"WARNING: tokenization mismatch: {cur_len} vs. {total_len}."
+                    f" (ignored)"
+                )
+
+    return dict(input_ids=input_ids, labels=targets)
 
 def preprocess_mpt(
     sources,
@@ -584,7 +805,6 @@ def preprocess_mpt(
         labels=targets,
     )
 
-
 def preprocess_plain(
     sources: Sequence[str],
     tokenizer: transformers.PreTrainedTokenizer,
@@ -627,6 +847,10 @@ def preprocess(
         return preprocess_v1(sources, tokenizer, has_image=has_image)
     if conversation_lib.default_conversation.version == "mpt":
         return preprocess_mpt(sources, tokenizer, has_image=has_image)
+    if conversation_lib.default_conversation.version.startswith("eeve"):
+        return preprocess_eeve(sources, tokenizer, has_image=has_image)
+    if conversation_lib.default_conversation.version.startswith("debug"):
+        return preprocess_v1_with_debug(sources, tokenizer, has_image=has_image)
     # add end signal and concatenate together
     conversations = []
     for source in sources:
@@ -823,6 +1047,14 @@ def train(attn_implementation=None):
                 cache_dir=training_args.cache_dir,
                 **bnb_model_from_pretrained_args
             )
+        elif 'eeve' in model_args.model_name_or_path or 'phi' in model_args.model_name_or_path:
+            model = LlavaPhiForCausalLM.from_pretrained(
+                    model_args.model_name_or_path,
+                    cache_dir=training_args.cache_dir,
+                    attn_implementation=attn_implementation,
+                    torch_dtype=(torch.bfloat16 if training_args.bf16 else None),
+                    **bnb_model_from_pretrained_args
+                )
         else:
             model = LlavaLlamaForCausalLM.from_pretrained(
                 model_args.model_name_or_path,
@@ -832,7 +1064,7 @@ def train(attn_implementation=None):
                 **bnb_model_from_pretrained_args
             )
     else:
-        model = transformers.LlamaForCausalLM.from_pretrained(
+        model = transformers.AutoModelForCausalLM.from_pretrained(
             model_args.model_name_or_path,
             cache_dir=training_args.cache_dir,
             attn_implementation=attn_implementation,
@@ -888,7 +1120,7 @@ def train(attn_implementation=None):
             cache_dir=training_args.cache_dir,
             model_max_length=training_args.model_max_length,
             padding_side="right",
-            use_fast=False,
+            use_fast=True,
         )
 
     if model_args.version == "v0":

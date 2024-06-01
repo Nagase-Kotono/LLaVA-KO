@@ -1,6 +1,7 @@
 import dataclasses
 from enum import auto, Enum
-from typing import List, Tuple
+from typing import List, Any, Dict, Union, Tuple
+import re
 import base64
 from io import BytesIO
 from PIL import Image
@@ -13,6 +14,7 @@ class SeparatorStyle(Enum):
     MPT = auto()
     PLAIN = auto()
     LLAMA_2 = auto()
+    LLAMA_3 = auto()
 
 
 @dataclasses.dataclass
@@ -26,7 +28,12 @@ class Conversation:
     sep: str = "###"
     sep2: str = None
     version: str = "Unknown"
-
+    tokenizer_id: str = ""
+    tokenizer: Any = None
+    # Stop criteria (the default one is EOS token)
+    stop_str: Union[str, List[str]] = None
+    # Stops generation if meeting any token in this list
+    stop_token_ids: List[int] = None
     skip_next: bool = False
 
     def get_prompt(self):
@@ -51,6 +58,7 @@ class Conversation:
                     ret += role + ": " + message + self.sep
                 else:
                     ret += role + ":"
+                    
         elif self.sep_style == SeparatorStyle.TWO:
             seps = [self.sep, self.sep2]
             ret = self.system + seps[0]
@@ -61,6 +69,19 @@ class Conversation:
                     ret += role + ": " + message + seps[i % 2]
                 else:
                     ret += role + ":"
+                    
+        elif self.sep_style == SeparatorStyle.LLAMA_3:
+            chat_template_messages = [{"role": "system", "content": self.system}]
+            for role, message in messages:
+                if message:
+                    if type(message) is tuple:
+                        message, images = message
+                        message = "<image>" * len(images) + message
+                    chat_template_messages.append({"role": role, "content": message})
+
+            # print(chat_template_messages)
+            return self.tokenizer.apply_chat_template(chat_template_messages, tokenize=False, add_generation_prompt=True)
+        
         elif self.sep_style == SeparatorStyle.MPT:
             ret = self.system + self.sep
             for role, message in messages:
@@ -70,6 +91,7 @@ class Conversation:
                     ret += role + message + self.sep
                 else:
                     ret += role
+                    
         elif self.sep_style == SeparatorStyle.LLAMA_2:
             wrap_sys = lambda msg: f"<<SYS>>\n{msg}\n<</SYS>>\n\n" if len(msg) > 0 else msg
             wrap_inst = lambda msg: f"[INST] {msg} [/INST]"
@@ -123,6 +145,7 @@ class Conversation:
                     result = Image.new(pil_img.mode, (height, height), background_color)
                     result.paste(pil_img, ((height - width) // 2, 0))
                     return result
+
             image = expand2square(image)
         elif image_process_mode in ["Default", "Crop"]:
             pass
@@ -215,24 +238,24 @@ conv_vicuna_v0 = Conversation(
     messages=(
         ("Human", "What are the key differences between renewable and non-renewable energy sources?"),
         ("Assistant",
-            "Renewable energy sources are those that can be replenished naturally in a relatively "
-            "short amount of time, such as solar, wind, hydro, geothermal, and biomass. "
-            "Non-renewable energy sources, on the other hand, are finite and will eventually be "
-            "depleted, such as coal, oil, and natural gas. Here are some key differences between "
-            "renewable and non-renewable energy sources:\n"
-            "1. Availability: Renewable energy sources are virtually inexhaustible, while non-renewable "
-            "energy sources are finite and will eventually run out.\n"
-            "2. Environmental impact: Renewable energy sources have a much lower environmental impact "
-            "than non-renewable sources, which can lead to air and water pollution, greenhouse gas emissions, "
-            "and other negative effects.\n"
-            "3. Cost: Renewable energy sources can be more expensive to initially set up, but they typically "
-            "have lower operational costs than non-renewable sources.\n"
-            "4. Reliability: Renewable energy sources are often more reliable and can be used in more remote "
-            "locations than non-renewable sources.\n"
-            "5. Flexibility: Renewable energy sources are often more flexible and can be adapted to different "
-            "situations and needs, while non-renewable sources are more rigid and inflexible.\n"
-            "6. Sustainability: Renewable energy sources are more sustainable over the long term, while "
-            "non-renewable sources are not, and their depletion can lead to economic and social instability.\n")
+         "Renewable energy sources are those that can be replenished naturally in a relatively "
+         "short amount of time, such as solar, wind, hydro, geothermal, and biomass. "
+         "Non-renewable energy sources, on the other hand, are finite and will eventually be "
+         "depleted, such as coal, oil, and natural gas. Here are some key differences between "
+         "renewable and non-renewable energy sources:\n"
+         "1. Availability: Renewable energy sources are virtually inexhaustible, while non-renewable "
+         "energy sources are finite and will eventually run out.\n"
+         "2. Environmental impact: Renewable energy sources have a much lower environmental impact "
+         "than non-renewable sources, which can lead to air and water pollution, greenhouse gas emissions, "
+         "and other negative effects.\n"
+         "3. Cost: Renewable energy sources can be more expensive to initially set up, but they typically "
+         "have lower operational costs than non-renewable sources.\n"
+         "4. Reliability: Renewable energy sources are often more reliable and can be used in more remote "
+         "locations than non-renewable sources.\n"
+         "5. Flexibility: Renewable energy sources are often more flexible and can be adapted to different "
+         "situations and needs, while non-renewable sources are more rigid and inflexible.\n"
+         "6. Sustainability: Renewable energy sources are more sustainable over the long term, while "
+         "non-renewable sources are not, and their depletion can lead to economic and social instability.\n")
     ),
     offset=2,
     sep_style=SeparatorStyle.SINGLE,
@@ -241,7 +264,7 @@ conv_vicuna_v0 = Conversation(
 
 conv_vicuna_v1 = Conversation(
     system="A chat between a curious user and an artificial intelligence assistant. "
-    "The assistant gives helpful, detailed, and polite answers to the user's questions.",
+           "The assistant gives helpful, detailed, and polite answers to the user's questions.",
     roles=("USER", "ASSISTANT"),
     version="v1",
     messages=(),
@@ -263,6 +286,7 @@ If a question does not make any sense, or is not factually coherent, explain why
     sep="<s>",
     sep2="</s>",
 )
+
 
 conv_llava_llama_2 = Conversation(
     system="You are a helpful language and vision assistant. "
@@ -369,7 +393,28 @@ Answer the questions.""",
     sep="<|im_end|>",
 )
 
-default_conversation = conv_vicuna_v1
+conv_llama3 = Conversation(
+    system="""<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nA chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.""",
+    roles=("<|start_header_id|>user<|end_header_id|>\n\n", "<|start_header_id|>assistant<|end_header_id|>\n\n"),
+    version="llama3",
+    messages=(),
+    offset=0,
+    sep_style=SeparatorStyle.MPT,
+    sep="<|eot_id|>",
+)
+
+conv_eeve = Conversation(
+    system="""A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.""",
+    roles=("'Human: ", "Assistant: "),
+    version="eeve",
+    messages=(),
+    offset=0,
+    sep_style=SeparatorStyle.TWO,
+    sep=" ",
+    sep2="<|im_end|>",
+)
+
+default_conversation = conv_llama3
 conv_templates = {
     "default": conv_vicuna_v0,
     "v0": conv_vicuna_v0,
@@ -387,10 +432,11 @@ conv_templates = {
     "llava_v1": conv_llava_v1,
     "v1_mmtag": conv_llava_v1_mmtag,
     "llava_llama_2": conv_llava_llama_2,
+    "llama3": conv_llama3,
+    "eeve": conv_eeve,
 
     "mpt": conv_mpt,
 }
-
 
 if __name__ == "__main__":
     print(default_conversation.get_prompt())
