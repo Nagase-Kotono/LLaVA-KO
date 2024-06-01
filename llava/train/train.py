@@ -1047,7 +1047,7 @@ def train(attn_implementation=None):
                 cache_dir=training_args.cache_dir,
                 **bnb_model_from_pretrained_args
             )
-        elif 'eeve' in model_args.model_name_or_path or 'phi' in model_args.model_name_or_path:
+        elif 'eeve' in model_args.model_name_or_path.lower() or 'phi' in model_args.model_name_or_path.lower():
             model = LlavaPhiForCausalLM.from_pretrained(
                     model_args.model_name_or_path,
                     cache_dir=training_args.cache_dir,
