@@ -414,6 +414,17 @@ conv_eeve = Conversation(
     sep2="<|im_end|>",
 )
 
+conv_debug = Conversation(
+    system="""A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.""",
+    roles=("'Human: ", "Assistant: "),
+    version="debug",
+    messages=(),
+    offset=0,
+    sep_style=SeparatorStyle.TWO,
+    sep=" ",
+    sep2="<|im_end|>",
+)
+
 default_conversation = conv_llama3
 conv_templates = {
     "default": conv_vicuna_v0,
@@ -434,7 +445,7 @@ conv_templates = {
     "llava_llama_2": conv_llava_llama_2,
     "llama3": conv_llama3,
     "eeve": conv_eeve,
-
+    "debug": conv_debug,
     "mpt": conv_mpt,
 }
 
