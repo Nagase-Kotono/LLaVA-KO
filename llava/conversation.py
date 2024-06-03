@@ -405,7 +405,7 @@ conv_llama3 = Conversation(
 
 conv_eeve = Conversation(
     system="""A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.""",
-    roles=("'Human: ", "Assistant: "),
+    roles=("Human: ", "Assistant: "),
     version="eeve",
     messages=(),
     offset=0,
@@ -416,7 +416,7 @@ conv_eeve = Conversation(
 
 conv_debug = Conversation(
     system="""A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.""",
-    roles=("'Human: ", "Assistant: "),
+    roles=("Human: ", "Assistant: "),
     version="debug",
     messages=(),
     offset=0,
