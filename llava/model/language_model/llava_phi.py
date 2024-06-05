@@ -1,36 +1,55 @@
+# Modified from LLaVA: https://github.com/haotian-liu/LLaVA.git
+#
+#    Copyright 2023 Haotian Liu
+#
+#    Licensed under the Apache License, Version 2.0 (the "License");
+#    you may not use this file except in compliance with the License.
+#    You may obtain a copy of the License at
+#
+#        http://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS,
+#    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#    See the License for the specific language governing permissions and
+#    limitations under the License.
+
+
 from typing import List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
 
 from transformers import AutoConfig, AutoModelForCausalLM, \
-                         PhiConfig, PhiModel, PhiForCausalLM
+                         PhiModel, PhiConfig, PhiForCausalLM
 
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.generation.utils import GenerateOutput
 
 from ..llava_arch import LlavaMetaModel, LlavaMetaForCausalLM
 
+
 class LlavaPhiConfig(PhiConfig):
     model_type = "llava_phi"
-    
+
+
 class LlavaPhiModel(LlavaMetaModel, PhiModel):
     config_class = LlavaPhiConfig
 
     def __init__(self, config: PhiConfig):
         super(LlavaPhiModel, self).__init__(config)
-     #------   
+
+
 class LlavaPhiForCausalLM(PhiForCausalLM, LlavaMetaForCausalLM):
     config_class = LlavaPhiConfig
 
     def __init__(self, config):
         super(PhiForCausalLM, self).__init__(config)
         self.model = LlavaPhiModel(config)
-
-        # 출력 크기에 맞게 선형 변환 레이어 초기화
+        self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
-        # 가중치 초기화 및 최종 처리 적용
+        # Initialize weights and apply final processing
         self.post_init()
 
     def get_model(self):
@@ -53,7 +72,6 @@ class LlavaPhiForCausalLM(PhiForCausalLM, LlavaMetaForCausalLM):
     ) -> Union[Tuple, CausalLMOutputWithPast]:
 
         if inputs_embeds is None:
-            # 멀티모달 입력을 위한 입력 데이터와 레이블 준비
             (
                 input_ids,
                 position_ids,
@@ -71,7 +89,6 @@ class LlavaPhiForCausalLM(PhiForCausalLM, LlavaMetaForCausalLM):
                 image_sizes
             )
 
-        # 상위 클래스의 forward 메소드 호출
         return super().forward(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -99,7 +116,6 @@ class LlavaPhiForCausalLM(PhiForCausalLM, LlavaMetaForCausalLM):
             raise NotImplementedError("`inputs_embeds` is not supported")
 
         if images is not None:
-            # 이미지가 있는 경우, 멀티모달 입력을 위한 입력 데이터 준비
             (
                 inputs,
                 position_ids,
@@ -117,10 +133,8 @@ class LlavaPhiForCausalLM(PhiForCausalLM, LlavaMetaForCausalLM):
                 image_sizes=image_sizes
             )
         else:
-            # 이미지가 없는 경우, 입력 토큰을 임베딩으로 변환
             inputs_embeds = self.get_model().embed_tokens(inputs)
 
-        # 상위 클래스의 generate 메소드 호출
         return super().generate(
             position_ids=position_ids,
             attention_mask=attention_mask,
@@ -132,19 +146,15 @@ class LlavaPhiForCausalLM(PhiForCausalLM, LlavaMetaForCausalLM):
                                       inputs_embeds=None, **kwargs):
         images = kwargs.pop("images", None)
         image_sizes = kwargs.pop("image_sizes", None)
-        
-        # 상위 클래스의 prepare_inputs_for_generation 메소드 호출
         inputs = super().prepare_inputs_for_generation(
             input_ids, past_key_values=past_key_values, inputs_embeds=inputs_embeds, **kwargs
         )
-        
-        # 이미지와 이미지 크기 정보를 입력에 추가
         if images is not None:
             inputs['images'] = images
         if image_sizes is not None:
             inputs['image_sizes'] = image_sizes
         return inputs
 
-# LlavaPhiConfig와 LlavaPhiForCausalLM을 AutoConfig와 AutoModelForCausalLM에 등록
+
 AutoConfig.register("llava_phi", LlavaPhiConfig)
 AutoModelForCausalLM.register(LlavaPhiConfig, LlavaPhiForCausalLM)
