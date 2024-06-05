@@ -41,6 +41,9 @@ def main(args):
         conv_mode = "llava_v1"
     elif "mpt" in model_name.lower():
         conv_mode = "mpt"
+    elif "eeve" in model_name.lower():
+        conv_mode = "eeve"    
+    
     else:
         conv_mode = "llava_v0"
 
